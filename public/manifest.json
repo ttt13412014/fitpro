@@ -1,0 +1,78 @@
+{
+  "name": "FitPro — Tu Coach Personal",
+  "short_name": "FitPro",
+  "description": "Tracker de gym, nutrición y coach IA personal",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#6c63ff",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icons/icon-72.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-96.png",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-144.png",
+      "sizes": "144x144",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-152.png",
+      "sizes": "152x152",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-384.png",
+      "sizes": "384x384",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["health", "fitness", "lifestyle"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Entrenar",
+      "short_name": "Gym",
+      "description": "Empezar un entrenamiento",
+      "url": "/workout",
+      "icons": [{ "src": "/icons/icon-96.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "Nutrición",
+      "short_name": "Comida",
+      "description": "Registrar comida",
+      "url": "/nutrition",
+      "icons": [{ "src": "/icons/icon-96.png", "sizes": "96x96" }]
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: 'Syne', sans-serif;
+  --font-body: 'DM Sans', sans-serif;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-top: env(safe-area-inset-top, 0px);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: #0a0a0f;
+  color: #f0f0ff;
+  min-height: 100vh;
+  min-height: 100dvh;
+  /* Prevent text selection flicker on touch */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* iOS safe areas */
+.safe-area-bottom {
+  padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+}
+.safe-area-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* Scrollbar — hide on mobile, style on desktop */
+@media (min-width: 1024px) {
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3a52; }
+}
+
+/* Number inputs: hide spin buttons */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; }
+
+/* Prevent zoom on input focus (iOS) */
+@media (max-width: 768px) {
+  input, select, textarea { font-size: 16px !important; }
+}
+
+/* Snap scrolling for stats row */
+.snap-x { scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; }
+.snap-start { scroll-snap-align: start; }
+
+@layer components {
+  .card {
+    @apply bg-bg-card rounded-2xl border border-border-subtle p-4 shadow-card;
+  }
+  .card-elevated {
+    @apply bg-bg-elevated rounded-2xl border border-border-default p-4 shadow-card;
+  }
+  .btn-primary {
+    @apply bg-accent-primary text-white px-4 py-2.5 rounded-xl font-medium text-sm
+           hover:bg-opacity-90 active:scale-95 transition-all duration-150 select-none;
+  }
+  .btn-secondary {
+    @apply bg-bg-elevated border border-border-default text-text-primary px-4 py-2.5
+           rounded-xl font-medium text-sm hover:bg-bg-hover active:scale-95 transition-all duration-150 select-none;
+  }
+  .btn-danger {
+    @apply bg-accent-red text-white px-4 py-2.5 rounded-xl font-medium text-sm
+           hover:bg-opacity-90 active:scale-95 transition-all duration-150;
+  }
+  .input {
+    @apply w-full bg-bg-elevated border border-border-default text-text-primary
+           rounded-xl px-4 py-3 text-sm placeholder:text-text-muted
+           focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary
+           transition-colors duration-150;
+  }
+  .label {
+    @apply text-xs font-medium text-text-secondary mb-1.5 block;
+  }
+  .badge-green {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium
+           bg-accent-green/10 text-accent-green border border-accent-green/20;
+  }
+  .badge-yellow {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium
+           bg-accent-yellow/10 text-accent-yellow border border-accent-yellow/20;
+  }
+  .badge-red {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium
+           bg-accent-red/10 text-accent-red border border-accent-red/20;
+  }
+  .badge-purple {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium
+           bg-accent-primary/10 text-accent-primary border border-accent-primary/20;
+  }
+  .section-title {
+    @apply font-display font-bold text-base text-text-primary;
+  }
+  .nav-link {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-text-secondary
+           hover:bg-bg-hover hover:text-text-primary transition-all duration-150;
+  }
+  .nav-link-active {
+    @apply nav-link bg-accent-primary/10 text-accent-primary border border-accent-primary/20;
+  }
+}
+
+/* Animations */
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+
+.animate-fade-in { animation: fadeIn 0.3s ease-out; }
+.animate-slide-up { animation: slideUp 0.3s ease-out; }
+
+.skeleton {
+  background: linear-gradient(90deg, #16161f 25%, #1c1c28 50%, #16161f 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Recharts */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line { stroke: #1e1e2e !important; }
