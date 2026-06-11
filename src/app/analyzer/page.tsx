@@ -1,549 +1,337 @@
-'use client';
+"use client";
 
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { Camera, CameraOff, RefreshCw, Zap, Activity, ChevronDown, Info } from 'lucide-react';
-import toast from 'react-hot-toast';
+import { useEffect, useRef, useState, useCallback } from "react";
+import { Camera, Square, RotateCcw, CheckCircle, Save, Loader2, Sun, Info, AlertTriangle } from "lucide-react";
+import toast from "react-hot-toast";
+import { createClient } from "@/lib/supabase/client";
 
-// ─── Tipos ───────────────────────────────────────────────────────────────────
-interface Keypoint {
-  x: number;
-  y: number;
-  score: number;
-  name: string;
+interface Keypoint { x: number; y: number; score: number; name: string; }
+type Phase = "idle" | "calibrating" | "ready" | "running" | "done";
+
+interface ExerciseConfig {
+  id: string; label: string; emoji: string;
+  angleJoints: [string, string, string];
+  upThreshold: number; downThreshold: number;
+  cues: string[]; requiredKeypoints: string[];
+  trailKeypoint: string;
 }
 
-interface RepState {
-  count: number;
-  stage: 'UP' | 'DOWN';
-  angle: number;
-  feedback: string;
-  feedbackColor: string;
-}
+interface TrailPoint { x: number; y: number; t: number; phase: "up" | "down" | "neutral"; }
 
-// Ejercicios disponibles con sus articulaciones
-const EXERCISES = [
-  {
-    id: 'curl',
-    name: 'Curl de Bíceps',
-    description: 'Flexión del codo (hombro → codo → muñeca)',
-    joints: ['right_shoulder', 'right_elbow', 'right_wrist'],
-    angleDown: 160,   // brazo extendido
-    angleUp: 50,      // máxima contracción
-    cueDown: 'Bajá el brazo completamente',
-    cueUp: '¡Buena contracción! Bajá controlado',
-    cuePartial: 'Estirá más el brazo al bajar',
-  },
-  {
-    id: 'squat',
-    name: 'Sentadilla',
-    description: 'Flexión de rodilla (cadera → rodilla → tobillo)',
-    joints: ['right_hip', 'right_knee', 'right_ankle'],
-    angleDown: 90,
-    angleUp: 160,
-    cueDown: 'Bajá más, paralelo al piso',
-    cueUp: '¡Rep contada! Volvé a bajar',
-    cuePartial: 'Bajá más profundo',
-  },
-  {
-    id: 'pushup',
-    name: 'Flexiones',
-    description: 'Flexión del codo (hombro → codo → muñeca)',
-    joints: ['right_shoulder', 'right_elbow', 'right_wrist'],
-    angleDown: 90,
-    angleUp: 160,
-    cueDown: 'Bajá el pecho al piso',
-    cueUp: '¡Rep contada! Volvé a bajar',
-    cuePartial: 'Extendé más los brazos',
-  },
-  {
-    id: 'lateral_raise',
-    name: 'Lateral Raise',
-    description: 'Elevación lateral (cadera → hombro → codo)',
-    joints: ['right_hip', 'right_shoulder', 'right_elbow'],
-    angleDown: 20,
-    angleUp: 80,
-    cueDown: 'Bajá los brazos completamente',
-    cueUp: '¡Rep contada! Bajá controlado',
-    cuePartial: 'Subí más los codos',
-  },
+const EXERCISES: ExerciseConfig[] = [
+  { id: "curl", label: "Curl de bíceps", emoji: "💪", angleJoints: ["left_shoulder","left_elbow","left_wrist"], upThreshold: 60, downThreshold: 150, cues: ["Codo pegado al cuerpo","Movimiento controlado","Aprieta arriba"], requiredKeypoints: ["left_shoulder","left_elbow","left_wrist"], trailKeypoint: "left_wrist" },
+  { id: "squat", label: "Sentadilla", emoji: "🦵", angleJoints: ["left_hip","left_knee","left_ankle"], upThreshold: 160, downThreshold: 100, cues: ["Rodillas sobre pies","Espalda recta","Baja hasta 90°"], requiredKeypoints: ["left_hip","left_knee","left_ankle"], trailKeypoint: "left_knee" },
+  { id: "pushup", label: "Flexiones", emoji: "🔥", angleJoints: ["left_shoulder","left_elbow","left_wrist"], upThreshold: 155, downThreshold: 90, cues: ["Cuerpo en línea recta","Codos 45°","Pecho al suelo"], requiredKeypoints: ["left_shoulder","left_elbow","left_wrist"], trailKeypoint: "left_wrist" },
+  { id: "lateral", label: "Elevación lateral", emoji: "🏋️", angleJoints: ["left_hip","left_shoulder","left_elbow"], upThreshold: 70, downThreshold: 20, cues: ["Brazos al nivel del hombro","Leve flexión de codo","Bajar lento"], requiredKeypoints: ["left_hip","left_shoulder","left_elbow"], trailKeypoint: "left_wrist" },
 ];
 
-// ─── Lógica de ángulo (igual al código Dart original) ────────────────────────
-function calcularAngulo(a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }): number {
-  const radianes = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
-  let angulo = Math.abs(radianes * 180.0 / Math.PI);
-  if (angulo > 180.0) angulo = 360.0 - angulo;
-  return angulo;
+const TRAIL_MAX_AGE = 1800;
+const TRAIL_MAX_POINTS = 120;
+
+function getAngle(a: Keypoint, vertex: Keypoint, b: Keypoint): number {
+  const radians = Math.atan2(b.y - vertex.y, b.x - vertex.x) - Math.atan2(a.y - vertex.y, a.x - vertex.x);
+  let angle = Math.abs((radians * 180) / Math.PI);
+  if (angle > 180) angle = 360 - angle;
+  return angle;
 }
 
-// ─── Componente principal ─────────────────────────────────────────────────────
-export default function AnalyzerPage() {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const detectorRef = useRef<any>(null);
-  const animFrameRef = useRef<number>(0);
-  const repStateRef = useRef<RepState>({ count: 0, stage: 'DOWN', angle: 0, feedback: 'Posicionate de perfil y empezá', feedbackColor: '#f0f0ff' });
+function keypointMap(keypoints: Keypoint[]): Record<string, Keypoint> {
+  return Object.fromEntries(keypoints.map((kp) => [kp.name, kp]));
+}
 
-  const [cameraActive, setCameraActive] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [modelLoaded, setModelLoaded] = useState(false);
-  const [selectedExercise, setSelectedExercise] = useState(EXERCISES[0]);
-  const [showExercisePicker, setShowExercisePicker] = useState(false);
-  const [repState, setRepState] = useState<RepState>(repStateRef.current);
-  const [poseDetected, setPoseDetected] = useState(false);
-  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
+function visibilityScore(kpMap: Record<string, Keypoint>, names: string[]): number {
+  const scores = names.map((n) => kpMap[n]?.score ?? 0);
+  return scores.reduce((a, b) => a + b, 0) / scores.length;
+}
 
-  // ── Cargar TF.js + MoveNet desde CDN ──
-  async function loadModel() {
-    if (detectorRef.current) return true;
-    setLoading(true);
-    try {
-      // Cargar TensorFlow.js dinámicamente
-      await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js');
-      await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js');
-
-      const tf = (window as any).tf;
-      const poseDetection = (window as any).poseDetection;
-
-      await tf.ready();
-
-      const detector = await poseDetection.createDetector(
-        poseDetection.SupportedModels.MoveNet,
-        {
-          modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
-          enableSmoothing: true,
-        }
-      );
-
-      detectorRef.current = detector;
-      setModelLoaded(true);
-      return true;
-    } catch (err) {
-      console.error('Error cargando modelo:', err);
-      toast.error('Error al cargar el modelo de IA');
-      return false;
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function loadScript(src: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
-      const script = document.createElement('script');
-      script.src = src;
-      script.onload = () => resolve();
-      script.onerror = reject;
-      document.head.appendChild(script);
-    });
-  }
-
-  // ── Iniciar cámara ──
-  async function startCamera() {
-    const ok = await loadModel();
-    if (!ok) return;
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode, width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        setCameraActive(true);
-        startDetectionLoop();
-      }
-    } catch (err) {
-      toast.error('No se pudo acceder a la cámara');
-    }
-  }
-
-  // ── Detener cámara ──
-  function stopCamera() {
-    cancelAnimationFrame(animFrameRef.current);
-    if (videoRef.current?.srcObject) {
-      (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
-      videoRef.current.srcObject = null;
-    }
-    setCameraActive(false);
-    setPoseDetected(false);
-    clearCanvas();
-  }
-
-  function clearCanvas() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    ctx?.clearRect(0, 0, canvas.width, canvas.height);
-  }
-
-  // ── Loop de detección ──
-  function startDetectionLoop() {
-    async function detect() {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const detector = detectorRef.current;
-      if (!video || !canvas || !detector || video.readyState < 2) {
-        animFrameRef.current = requestAnimationFrame(detect);
-        return;
-      }
-
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-
-      try {
-        const poses = await detector.estimatePoses(video);
-        const ctx = canvas.getContext('2d')!;
-
-        // Dibujar video espejado
-        ctx.save();
-        ctx.scale(-1, 1);
-        ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
-        ctx.restore();
-
-        if (poses.length > 0) {
-          const keypoints: Keypoint[] = poses[0].keypoints;
-          setPoseDetected(true);
-          drawSkeleton(ctx, keypoints, canvas.width, canvas.height);
-          processExercise(keypoints, canvas.width, canvas.height);
-        } else {
-          setPoseDetected(false);
-          updateFeedback('No te detecto. Alejate un poco de la cámara.', '#f59e0b');
-        }
-      } catch (err) {
-        // silencioso
-      }
-
-      animFrameRef.current = requestAnimationFrame(detect);
-    }
-    animFrameRef.current = requestAnimationFrame(detect);
-  }
-
-  // ── Procesar ejercicio (lógica del código Dart) ──
-  function processExercise(keypoints: Keypoint[], w: number, h: number) {
-    const ex = selectedExercise;
-    const [nameA, nameB, nameC] = ex.joints;
-
-    const kpA = keypoints.find(k => k.name === nameA);
-    const kpB = keypoints.find(k => k.name === nameB);
-    const kpC = keypoints.find(k => k.name === nameC);
-
-    if (!kpA || !kpB || !kpC || kpA.score < 0.3 || kpB.score < 0.3 || kpC.score < 0.3) {
-      updateFeedback('Mostrá el lado derecho del cuerpo', '#f59e0b');
-      return;
-    }
-
-    // Los keypoints de MoveNet están normalizados 0-1, convertir a px
-    const a = { x: kpA.x, y: kpA.y };
-    const b = { x: kpB.x, y: kpB.y };
-    const c = { x: kpC.x, y: kpC.y };
-
-    const angulo = calcularAngulo(a, b, c);
-    const state = repStateRef.current;
-
-    let newState = { ...state, angle: Math.round(angulo) };
-
-    // CASO 1: Contracción completa (UP)
-    if (angulo < ex.angleUp && state.stage === 'DOWN') {
-      newState.stage = 'UP';
-      newState.count = state.count + 1;
-      newState.feedback = ex.cueUp;
-      newState.feedbackColor = '#22d3a5';
-    }
-    // CASO 2: Extensión completa (DOWN)
-    else if (angulo > ex.angleDown && state.stage === 'UP') {
-      newState.stage = 'DOWN';
-      newState.feedback = ex.cueDown;
-      newState.feedbackColor = '#3b82f6';
-    }
-    // CASO 3: Rango parcial
-    else if (angulo > (ex.angleUp + ex.angleDown) / 2 && state.stage === 'UP') {
-      newState.feedback = ex.cuePartial;
-      newState.feedbackColor = '#f59e0b';
-    }
-
-    repStateRef.current = newState;
-    setRepState({ ...newState });
-  }
-
-  function updateFeedback(msg: string, color: string) {
-    repStateRef.current = { ...repStateRef.current, feedback: msg, feedbackColor: color };
-    setRepState(s => ({ ...s, feedback: msg, feedbackColor: color }));
-  }
-
-  // ── Dibujar esqueleto ──
-  function drawSkeleton(ctx: CanvasRenderingContext2D, keypoints: Keypoint[], w: number, h: number) {
-    const CONNECTIONS = [
-      ['left_shoulder', 'right_shoulder'],
-      ['left_shoulder', 'left_elbow'], ['left_elbow', 'left_wrist'],
-      ['right_shoulder', 'right_elbow'], ['right_elbow', 'right_wrist'],
-      ['left_shoulder', 'left_hip'], ['right_shoulder', 'right_hip'],
-      ['left_hip', 'right_hip'],
-      ['left_hip', 'left_knee'], ['left_knee', 'left_ankle'],
-      ['right_hip', 'right_knee'], ['right_knee', 'right_ankle'],
-    ];
-
-    const kpMap = new Map(keypoints.map(k => [k.name, k]));
-    const [nameA, nameB, nameC] = selectedExercise.joints;
-    const activeJoints = new Set([nameA, nameB, nameC]);
-
-    // Líneas del esqueleto
-    ctx.lineWidth = 2;
-    for (const [a, b] of CONNECTIONS) {
-      const ka = kpMap.get(a);
-      const kb = kpMap.get(b);
-      if (!ka || !kb || ka.score < 0.3 || kb.score < 0.3) continue;
-      const isActive = activeJoints.has(a) || activeJoints.has(b);
-      ctx.strokeStyle = isActive ? '#6c63ff' : 'rgba(255,255,255,0.3)';
-      ctx.lineWidth = isActive ? 3 : 1.5;
-      ctx.beginPath();
-      // Espejo horizontal
-      ctx.moveTo(w - ka.x * w, ka.y * h);
-      ctx.lineTo(w - kb.x * w, kb.y * h);
-      ctx.stroke();
-    }
-
-    // Puntos
-    for (const kp of keypoints) {
-      if (kp.score < 0.3) continue;
-      const isActive = activeJoints.has(kp.name);
-      const px = w - kp.x * w;
-      const py = kp.y * h;
-      ctx.beginPath();
-      ctx.arc(px, py, isActive ? 7 : 4, 0, 2 * Math.PI);
-      ctx.fillStyle = isActive ? '#6c63ff' : 'rgba(255,255,255,0.6)';
-      ctx.fill();
-      if (isActive) {
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-    }
-
-    // Ángulo sobre la articulación central
-    const centerJoint = kpMap.get(selectedExercise.joints[1]);
-    if (centerJoint && centerJoint.score > 0.3) {
-      const px = w - centerJoint.x * w;
-      const py = centerJoint.y * h;
-      ctx.font = 'bold 16px monospace';
-      ctx.fillStyle = '#ffffff';
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 3;
-      const text = `${repStateRef.current.angle}°`;
-      ctx.strokeText(text, px + 10, py - 10);
-      ctx.fillText(text, px + 10, py - 10);
-    }
-  }
-
-  function resetCount() {
-    repStateRef.current = { count: 0, stage: 'DOWN', angle: 0, feedback: 'Contador reiniciado. Empezá.', feedbackColor: '#f0f0ff' };
-    setRepState({ ...repStateRef.current });
-  }
-
-  async function flipCamera() {
-    stopCamera();
-    setFacingMode(f => f === 'user' ? 'environment' : 'user');
-  }
-
-  useEffect(() => {
-    if (facingMode && !cameraActive) return;
-    if (cameraActive) { stopCamera(); setTimeout(startCamera, 300); }
-  }, [facingMode]);
-
-  useEffect(() => {
-    return () => { stopCamera(); };
-  }, []);
-
-  const stagePct = repState.stage === 'UP'
-    ? Math.min(100, 100 - ((repState.angle - selectedExercise.angleUp) / (selectedExercise.angleDown - selectedExercise.angleUp)) * 100)
-    : Math.min(100, ((repState.angle - selectedExercise.angleUp) / (selectedExercise.angleDown - selectedExercise.angleUp)) * 100);
-
+function CalibrationGuide({ visibility, exercise, onStart }: { visibility: number; exercise: ExerciseConfig; onStart: () => void; }) {
+  const good = visibility >= 0.6;
   return (
-    <div className="space-y-4 animate-fade-in pb-4">
-      {/* Desktop title */}
-      <div className="hidden lg:block">
-        <h1 className="font-display font-bold text-2xl text-text-primary">Analizador de Repeticiones</h1>
-        <p className="text-sm text-text-secondary mt-0.5">IA detecta tus movimientos en tiempo real</p>
-      </div>
-
-      {/* Exercise selector */}
-      <div className="card">
-        <button
-          onClick={() => setShowExercisePicker(!showExercisePicker)}
-          className="flex items-center justify-between w-full"
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-accent-primary/10 rounded-xl flex items-center justify-center">
-              <Activity className="w-4 h-4 text-accent-primary" />
-            </div>
-            <div className="text-left">
-              <p className="font-semibold text-sm text-text-primary">{selectedExercise.name}</p>
-              <p className="text-xs text-text-muted">{selectedExercise.description}</p>
-            </div>
+    <div className="absolute inset-0 flex items-end justify-center pb-6 px-4">
+      <div className="w-full max-w-sm bg-black/80 backdrop-blur-md rounded-3xl p-5 space-y-4 border border-white/10">
+        <div className="flex items-center gap-3">
+          <div className={`w-3 h-3 rounded-full ${good ? "bg-emerald-400 animate-pulse" : "bg-amber-400 animate-pulse"}`} />
+          <p className="text-sm font-semibold text-white">{good ? "Posición detectada" : "Ajustá tu posición"}</p>
+        </div>
+        <div>
+          <div className="flex justify-between text-xs text-gray-400 mb-1.5">
+            <span>Detección corporal</span><span>{Math.round(visibility * 100)}%</span>
           </div>
-          <ChevronDown className={`w-4 h-4 text-text-muted transition-transform ${showExercisePicker ? 'rotate-180' : ''}`} />
-        </button>
-
-        {showExercisePicker && (
-          <div className="mt-3 space-y-1.5 animate-slide-up">
-            {EXERCISES.map(ex => (
-              <button
-                key={ex.id}
-                onClick={() => { setSelectedExercise(ex); setShowExercisePicker(false); resetCount(); }}
-                className={`w-full flex items-center gap-3 p-3 rounded-xl text-left transition-all ${
-                  selectedExercise.id === ex.id
-                    ? 'bg-accent-primary/10 border border-accent-primary/30'
-                    : 'hover:bg-bg-elevated'
-                }`}
-              >
-                <div>
-                  <p className="text-sm font-semibold text-text-primary">{ex.name}</p>
-                  <p className="text-xs text-text-muted">{ex.description}</p>
-                </div>
-              </button>
+          <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+            <div className={`h-full rounded-full transition-all duration-300 ${good ? "bg-emerald-400" : "bg-amber-400"}`} style={{ width: `${visibility * 100}%` }} />
+          </div>
+        </div>
+        {!good && (
+          <ul className="space-y-1.5">
+            {["Alejate 1.5-2m de la cámara","Asegurate de tener buena luz frontal","Tu cuerpo entero debe verse en pantalla"].map((tip, i) => (
+              <li key={i} className="flex items-center gap-2 text-xs text-gray-300">
+                <span className="w-4 h-4 rounded-full bg-white/10 flex items-center justify-center text-xs shrink-0">{i + 1}</span>{tip}
+              </li>
+            ))}
+          </ul>
+        )}
+        {good && (
+          <div className="space-y-1.5">
+            <p className="text-xs text-gray-400 font-medium">Claves para {exercise.label}:</p>
+            {exercise.cues.map((cue, i) => (
+              <p key={i} className="text-xs text-emerald-300 flex items-center gap-2"><CheckCircle size={12} />{cue}</p>
             ))}
           </div>
         )}
-      </div>
-
-      {/* Camera + canvas */}
-      <div className="relative rounded-2xl overflow-hidden bg-bg-card border border-border-subtle aspect-[3/4] lg:aspect-video">
-        <video ref={videoRef} className="hidden" playsInline muted />
-        <canvas ref={canvasRef} className="w-full h-full object-cover" />
-
-        {/* Placeholder when camera off */}
-        {!cameraActive && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-bg-card">
-            <div className="w-20 h-20 bg-accent-primary/10 rounded-3xl flex items-center justify-center">
-              <Camera className="w-10 h-10 text-accent-primary" />
-            </div>
-            <div className="text-center px-6">
-              <p className="font-display font-bold text-lg text-text-primary">Cámara apagada</p>
-              <p className="text-sm text-text-muted mt-1">
-                Activá la cámara para que la IA detecte tus movimientos
-              </p>
-            </div>
-            {loading && (
-              <div className="flex items-center gap-2 text-accent-primary text-sm">
-                <div className="w-4 h-4 border-2 border-accent-primary border-t-transparent rounded-full animate-spin" />
-                Cargando modelo IA...
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Pose detection indicator */}
-        {cameraActive && (
-          <div className={`absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-            poseDetected ? 'bg-accent-green/20 text-accent-green' : 'bg-accent-yellow/20 text-accent-yellow'
-          }`}>
-            <div className={`w-1.5 h-1.5 rounded-full ${poseDetected ? 'bg-accent-green animate-pulse' : 'bg-accent-yellow'}`} />
-            {poseDetected ? 'Pose detectada' : 'Buscando...'}
-          </div>
-        )}
-
-        {/* Flip camera button */}
-        {cameraActive && (
-          <button
-            onClick={flipCamera}
-            className="absolute top-3 right-3 w-9 h-9 bg-black/50 backdrop-blur-sm rounded-xl flex items-center justify-center text-white"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
-        )}
-
-        {/* Angle arc overlay */}
-        {cameraActive && poseDetected && (
-          <div className="absolute bottom-3 left-3 right-3">
-            <div className="bg-black/60 backdrop-blur-sm rounded-xl px-3 py-2">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] text-white/70 font-mono">ROM</span>
-                <span className="text-[10px] text-white/70 font-mono">{repState.angle}°</span>
-              </div>
-              <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-all duration-100"
-                  style={{
-                    width: `${Math.min(100, (repState.angle / 180) * 100)}%`,
-                    background: repState.feedbackColor,
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Rep counter + feedback */}
-      <div className="grid grid-cols-2 gap-3">
-        {/* Rep counter */}
-        <div className="card text-center py-5">
-          <p className="text-6xl font-bold font-display text-accent-primary leading-none">{repState.count}</p>
-          <p className="text-xs text-text-muted mt-2">repeticiones</p>
-          <div className={`mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-            repState.stage === 'UP' ? 'bg-accent-green/10 text-accent-green' : 'bg-accent-blue/10 text-accent-blue'
-          }`}>
-            <div className={`w-1.5 h-1.5 rounded-full ${repState.stage === 'UP' ? 'bg-accent-green' : 'bg-accent-blue'}`} />
-            {repState.stage === 'UP' ? 'Contraído' : 'Extendido'}
-          </div>
-        </div>
-
-        {/* Feedback */}
-        <div className="card flex flex-col justify-between py-5">
-          <div className="w-8 h-8 rounded-xl flex items-center justify-center mb-2" style={{ background: repState.feedbackColor + '20' }}>
-            <Zap className="w-4 h-4" style={{ color: repState.feedbackColor }} />
-          </div>
-          <p className="text-sm font-medium leading-snug" style={{ color: repState.feedbackColor }}>
-            {repState.feedback}
-          </p>
-        </div>
-      </div>
-
-      {/* Controls */}
-      <div className="flex gap-3">
-        <button
-          onClick={cameraActive ? stopCamera : startCamera}
-          disabled={loading}
-          className={`flex-1 flex items-center justify-center gap-2 py-3.5 rounded-xl font-semibold text-sm transition-all active:scale-95 ${
-            cameraActive
-              ? 'bg-accent-red/10 border border-accent-red/30 text-accent-red'
-              : 'btn-primary'
-          }`}
-        >
-          {loading ? (
-            <><div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" /> Cargando IA...</>
-          ) : cameraActive ? (
-            <><CameraOff className="w-4 h-4" /> Apagar cámara</>
-          ) : (
-            <><Camera className="w-4 h-4" /> Activar cámara</>
-          )}
+        <button onClick={onStart} disabled={!good}
+          className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 disabled:bg-white/10 disabled:text-gray-500 text-white text-sm font-bold rounded-2xl transition-all">
+          {good ? `Empezar ${exercise.label}` : "Esperando posición..."}
         </button>
-
-        <button
-          onClick={resetCount}
-          className="btn-secondary px-4 flex items-center justify-center gap-2"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Reset
-        </button>
-      </div>
-
-      {/* Tips */}
-      <div className="card bg-accent-primary/5 border-accent-primary/20">
-        <div className="flex gap-3">
-          <Info className="w-4 h-4 text-accent-primary shrink-0 mt-0.5" />
-          <div className="space-y-1">
-            <p className="text-xs font-semibold text-accent-primary">Consejos para mejor detección</p>
-            <ul className="text-xs text-text-secondary space-y-0.5">
-              <li>• Posicioná el celu de perfil (lado derecho visible)</li>
-              <li>• Buena iluminación, preferentemente de frente</li>
-              <li>• Que todo el cuerpo entre en el encuadre</li>
-              <li>• Ropa ajustada mejora la detección</li>
-            </ul>
-          </div>
-        </div>
       </div>
     </div>
   );
+}
+
+export default function AnalyzerPage() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const detectorRef = useRef<unknown>(null);
+  const animFrameRef = useRef<number>(0);
+  const repStateRef = useRef<"up" | "down">("up");
+  const lastAngleRef = useRef<number>(0);
+  const trailRef = useRef<TrailPoint[]>([]);
+
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [selectedExercise, setSelectedExercise] = useState<ExerciseConfig>(EXERCISES[0]);
+  const [repCount, setRepCount] = useState(0);
+  const [currentAngle, setCurrentAngle] = useState<number | null>(null);
+  const [visibility, setVisibility] = useState(0);
+  const [isLoadingModel, setIsLoadingModel] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [lightWarning, setLightWarning] = useState(false);
+
+  const initCamera = useCallback(async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: 640, height: 480 } });
+    if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
+  }, []);
+
+  const loadModel = useCallback(async () => {
+    setIsLoadingModel(true);
+    try {
+      const tf = await import("@tensorflow/tfjs");
+      await tf.ready();
+      const poseDetection = await import("@tensorflow-models/pose-detection");
+      detectorRef.current = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet, { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING, enableSmoothing: true });
+    } finally { setIsLoadingModel(false); }
+  }, []);
+
+  const handleStart = useCallback(async () => {
+    setPhase("idle"); setIsLoadingModel(true);
+    try {
+      await initCamera();
+      if (!detectorRef.current) await loadModel();
+      setPhase("calibrating");
+    } catch (err) { setModelError((err as Error).message); }
+    finally { setIsLoadingModel(false); }
+  }, [initCamera, loadModel]);
+
+  const detectLoop = useCallback(async () => {
+    if (!detectorRef.current || !videoRef.current || !canvasRef.current) return;
+    const video = videoRef.current, canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d")!;
+    const detector = detectorRef.current as { estimatePoses: (input: HTMLVideoElement) => Promise<{ keypoints: Keypoint[] }[]> };
+    try {
+      const poses = await detector.estimatePoses(video);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (poses.length > 0) {
+        const kpMap = keypointMap(poses[0].keypoints);
+        const ex = selectedExercise;
+        const vis = visibilityScore(kpMap, ex.requiredKeypoints);
+        setVisibility(vis); setLightWarning(vis < 0.35);
+        drawSkeleton(ctx, poses[0].keypoints, canvas.width, canvas.height);
+        const [aName, vertexName, bName] = ex.angleJoints;
+        const a = kpMap[aName], v = kpMap[vertexName], b = kpMap[bName];
+        if (a?.score > 0.3 && v?.score > 0.3 && b?.score > 0.3) {
+          const angle = getAngle(a, v, b);
+          lastAngleRef.current = angle; setCurrentAngle(Math.round(angle));
+          if (phase === "running") {
+            const state = repStateRef.current;
+            if (state === "up" && angle < ex.downThreshold) repStateRef.current = "down";
+            else if (state === "down" && angle > ex.upThreshold) { repStateRef.current = "up"; setRepCount((c) => c + 1); }
+          }
+        }
+        if (phase === "running") {
+          const trailKp = kpMap[ex.trailKeypoint];
+          if (trailKp && trailKp.score > 0.3) {
+            trailRef.current.push({ x: trailKp.x * (canvas.width / 640), y: trailKp.y * (canvas.height / 480), t: Date.now(), phase: repStateRef.current });
+            if (trailRef.current.length > TRAIL_MAX_POINTS) trailRef.current.shift();
+          }
+          const now = Date.now();
+          trailRef.current = trailRef.current.filter((p) => now - p.t < TRAIL_MAX_AGE);
+          drawTrail(ctx, trailRef.current, now);
+        }
+      }
+    } catch { }
+    animFrameRef.current = requestAnimationFrame(detectLoop);
+  }, [phase, selectedExercise]);
+
+  useEffect(() => {
+    if (phase === "calibrating" || phase === "running") animFrameRef.current = requestAnimationFrame(detectLoop);
+    return () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
+  }, [phase, detectLoop]);
+
+  const stopCamera = useCallback(() => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    const stream = videoRef.current?.srcObject as MediaStream;
+    stream?.getTracks().forEach((t) => t.stop());
+    if (videoRef.current) videoRef.current.srcObject = null;
+  }, []);
+
+  const handleSave = async () => {
+    if (repCount === 0) return;
+    setIsSaving(true);
+    try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("No autenticado");
+      await supabase.from("workout_sets").insert({ user_id: user.id, exercise_name: selectedExercise.label, reps: repCount, source: "analyzer", created_at: new Date().toISOString() });
+      toast.success(`${repCount} reps de ${selectedExercise.label} guardadas ✓`);
+      handleReset();
+    } catch { toast.error("No se pudo guardar"); }
+    finally { setIsSaving(false); }
+  };
+
+  const handleReset = () => {
+    stopCamera(); setPhase("idle"); setRepCount(0); setCurrentAngle(null);
+    setVisibility(0); repStateRef.current = "up"; trailRef.current = [];
+  };
+
+  useEffect(() => () => stopCamera(), [stopCamera]);
+
+  return (
+    <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col">
+      <div className="px-4 pt-4 pb-3 flex items-center justify-between">
+        <div><h1 className="text-lg font-bold">Analizador</h1><p className="text-xs text-gray-500">Detección de movimiento con cámara</p></div>
+        {phase !== "idle" && <button onClick={handleReset} className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-white px-3 py-2 rounded-xl hover:bg-white/5"><RotateCcw size={13} />Reiniciar</button>}
+      </div>
+
+      {phase === "idle" && (
+        <div className="px-4 space-y-4">
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Ejercicio</p>
+            <div className="grid grid-cols-2 gap-2">
+              {EXERCISES.map((ex) => (
+                <button key={ex.id} onClick={() => setSelectedExercise(ex)}
+                  className={`flex items-center gap-3 p-3.5 rounded-2xl border text-left transition-all ${selectedExercise.id === ex.id ? "border-emerald-500/40 bg-emerald-500/10" : "border-white/10 bg-white/3 hover:bg-white/5"}`}>
+                  <span className="text-2xl">{ex.emoji}</span>
+                  <span className="text-sm font-medium text-white">{ex.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-start gap-3 p-4 bg-white/3 rounded-2xl">
+            <Info size={14} className="text-gray-500 mt-0.5 shrink-0" />
+            <p className="text-xs text-gray-500">Necesitás buena iluminación y al menos 1.5m de distancia de la cámara. Las reps detectadas se guardan en tu historial.</p>
+          </div>
+          {modelError && <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-xl"><AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" /><p className="text-xs text-red-400">{modelError}</p></div>}
+          <button onClick={handleStart} disabled={isLoadingModel}
+            className="w-full flex items-center justify-center gap-2 py-4 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-white font-bold rounded-2xl">
+            {isLoadingModel ? <><Loader2 size={18} className="animate-spin" />Cargando modelo...</> : <><Camera size={18} />Activar cámara</>}
+          </button>
+        </div>
+      )}
+
+      {(phase === "calibrating" || phase === "running" || phase === "done") && (
+        <div className="flex-1 flex flex-col px-4 gap-4">
+          <div className="relative rounded-3xl overflow-hidden bg-black aspect-[3/4] max-h-[55vh] w-full">
+            <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover scale-x-[-1]" muted playsInline />
+            <canvas ref={canvasRef} className="absolute inset-0 w-full h-full scale-x-[-1]" width={640} height={480} />
+            {currentAngle !== null && (
+              <div className="absolute top-4 left-4 bg-black/70 backdrop-blur-sm px-3 py-1.5 rounded-xl">
+                <p className="text-xs text-gray-400">Ángulo</p>
+                <p className="text-lg font-bold text-white">{currentAngle}°</p>
+              </div>
+            )}
+            {phase === "running" && (
+              <div className="absolute top-4 right-4 bg-emerald-500/90 backdrop-blur-sm px-4 py-2 rounded-xl text-center">
+                <p className="text-3xl font-black text-white leading-none">{repCount}</p>
+                <p className="text-xs text-emerald-100">reps</p>
+              </div>
+            )}
+            {lightWarning && phase === "running" && (
+              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-amber-500/90 px-3 py-2 rounded-xl">
+                <Sun size={14} className="text-white" /><p className="text-xs text-white font-medium">Mejorá la iluminación</p>
+              </div>
+            )}
+            {phase === "calibrating" && (
+              <CalibrationGuide visibility={visibility} exercise={selectedExercise}
+                onStart={() => { repStateRef.current = "up"; setRepCount(0); setPhase("running"); }} />
+            )}
+          </div>
+
+          {phase === "running" && (
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={() => setPhase("done")} className="flex items-center justify-center gap-2 py-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl text-sm font-semibold text-white">
+                <Square size={16} />Terminar
+              </button>
+              <button onClick={handleSave} disabled={isSaving || repCount === 0} className="flex items-center justify-center gap-2 py-4 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 rounded-2xl text-sm font-semibold text-white">
+                {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}Guardar ({repCount})
+              </button>
+            </div>
+          )}
+
+          {phase === "done" && (
+            <div className="space-y-3">
+              <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl text-center">
+                <p className="text-4xl font-black text-emerald-400 mb-1">{repCount}</p>
+                <p className="text-sm text-gray-400">reps de {selectedExercise.label}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={handleReset} className="flex items-center justify-center gap-2 py-3.5 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-semibold text-white border border-white/10">
+                  <RotateCcw size={15} />Nueva serie
+                </button>
+                <button onClick={handleSave} disabled={isSaving || repCount === 0} className="flex items-center justify-center gap-2 py-3.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 rounded-2xl text-sm font-semibold text-white">
+                  {isSaving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}Guardar
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function drawTrail(ctx: CanvasRenderingContext2D, trail: TrailPoint[], now: number) {
+  if (trail.length < 2) return;
+  const PHASE_COLOR: Record<string, [number, number, number]> = { up: [52,211,153], down: [167,139,250], neutral: [148,163,184] };
+  for (let i = 1; i < trail.length; i++) {
+    const prev = trail[i-1], curr = trail[i];
+    const alpha = Math.max(0, 1 - (now - curr.t) / TRAIL_MAX_AGE);
+    if (alpha < 0.02) continue;
+    const [r,g,b] = PHASE_COLOR[curr.phase] ?? PHASE_COLOR.neutral;
+    ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.lineTo(curr.x, curr.y);
+    ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+    ctx.lineWidth = 2 + (i / trail.length) * 6;
+    ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke();
+  }
+  const tip = trail[trail.length-1];
+  const tipAlpha = Math.max(0, 1 - (now - tip.t) / TRAIL_MAX_AGE);
+  const [r,g,b] = PHASE_COLOR[tip.phase] ?? PHASE_COLOR.neutral;
+  ctx.beginPath(); ctx.arc(tip.x, tip.y, 10, 0, Math.PI*2);
+  ctx.fillStyle = `rgba(${r},${g},${b},${tipAlpha*0.25})`; ctx.fill();
+  ctx.beginPath(); ctx.arc(tip.x, tip.y, 5, 0, Math.PI*2);
+  ctx.fillStyle = `rgba(${r},${g},${b},${tipAlpha})`; ctx.fill();
+}
+
+function drawSkeleton(ctx: CanvasRenderingContext2D, keypoints: Keypoint[], w: number, h: number) {
+  const CONNECTIONS: [string,string][] = [["left_shoulder","right_shoulder"],["left_shoulder","left_elbow"],["left_elbow","left_wrist"],["right_shoulder","right_elbow"],["right_elbow","right_wrist"],["left_shoulder","left_hip"],["right_shoulder","right_hip"],["left_hip","right_hip"],["left_hip","left_knee"],["left_knee","left_ankle"],["right_hip","right_knee"],["right_knee","right_ankle"]];
+  const kpMap = keypointMap(keypoints);
+  ctx.strokeStyle = "rgba(52,211,153,0.7)"; ctx.lineWidth = 2;
+  CONNECTIONS.forEach(([a,b]) => {
+    const kpA = kpMap[a], kpB = kpMap[b];
+    if (!kpA || !kpB || kpA.score < 0.3 || kpB.score < 0.3) return;
+    ctx.beginPath(); ctx.moveTo(kpA.x*(w/640), kpA.y*(h/480)); ctx.lineTo(kpB.x*(w/640), kpB.y*(h/480)); ctx.stroke();
+  });
+  keypoints.forEach((kp) => {
+    if (kp.score < 0.3) return;
+    ctx.fillStyle = kp.score > 0.7 ? "#34d399" : "#fbbf24";
+    ctx.beginPath(); ctx.arc(kp.x*(w/640), kp.y*(h/480), 4, 0, Math.PI*2); ctx.fill();
+  });
 }
