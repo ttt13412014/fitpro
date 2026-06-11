@@ -265,7 +265,7 @@ export default function NutritionPage() {
   <NaturalInput
     onConfirm={async (result, mealType) => {
       for (const food of result.foods) {
-        await addNutritionLog({
+        await addNutritionLog(user!.id, {
           meal_name: food.name,
           meal_time: mealType,
           calories: food.calories,
@@ -273,7 +273,6 @@ export default function NutritionPage() {
           carbs_g: food.carbs,
           fat_g: food.fat,
           logged_date: new Date().toISOString().split("T")[0],
-          user_id: user!.id,
         });
       }
       await loadData();
