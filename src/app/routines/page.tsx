@@ -114,7 +114,7 @@ export default function RoutinesPage() {
         return;
       }
       for (const ex of exercises) {
-        await addExToDay(activeRoutine.routine_days[0].id, ex.name);
+        await addExToDay(activeRoutine.routine_days[0].id, { id: '', name: ex.name, muscle_group: ex.muscle_group || '', sets_target: ex.sets, reps_min: 8, reps_max: parseInt(ex.reps) || 12 } as any);
       }
       setShowImport(false);
       toast.success(`${exercises.length} ejercicios importados ✓`);
