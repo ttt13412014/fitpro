@@ -6,8 +6,7 @@ import { getSupabaseClient } from '@/lib/supabase';
 import type { Routine, Exercise } from '@/types';
 import { Plus, Trash2, BookOpen, Star, ChevronDown, X, Dumbbell } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { ExerciseSelector } from '@/components/workout/ExerciseSelector';
-
+import ExcelImportWizard from "@/components/routines/ExcelImportWizard";
 const ROUTINE_TYPES = ['PPL', 'Upper/Lower', 'Full Body', 'Bro Split', 'Custom'];
 
 export default function RoutinesPage() {
@@ -15,6 +14,7 @@ export default function RoutinesPage() {
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [exSelectorDay, setExSelectorDay] = useState<string | null>(null);
   const [newRoutine, setNewRoutine] = useState({ name: '', type: 'PPL', days_per_week: 4 });
@@ -75,7 +75,9 @@ export default function RoutinesPage() {
           <p className="text-sm text-text-secondary mt-0.5">Tus programas de entrenamiento</p>
         </div>
         <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2 lg:ml-auto">
-          <Plus className="w-4 h-4" /> Nueva rutina
+          <Plus className="w-4 h-4" /> Nueva rutina <button onClick={() => setShowImport(true)} className="btn-primary flex items-center gap-2">
+  <BookOpen className="w-4 h-4" /> Importar Excel
+</button>
         </button>
       </div>
 
@@ -102,7 +104,24 @@ export default function RoutinesPage() {
                   <input type="number" inputMode="numeric" className="input" min={1} max={7} value={newRoutine.days_per_week} onChange={e => setNewRoutine({ ...newRoutine, days_per_week: parseInt(e.target.value) })} />
                 </div>
               </div>
-            </div>
+            {showImport && (
+  <ExcelImportWizard
+    onClose={() => setShowImport(false)}
+    onConfirm={async (exercises) => {
+      const activeRoutine = routines.find(r => r.is_active);
+      if (!activeRoutine?.routine_days?.[0]?.id) {
+        toast.error("Seleccioná una rutina activa con al menos un día");
+        return;
+      }
+      for (const ex of exercises) {
+        await addExToDay(activeRoutine.routine_days[0].id, ex.name);
+      }
+      setShowImport(false);
+      toast.success(`${exercises.length} ejercicios importados ✓`);
+      load();
+    }}
+  />
+)}</div>
             <button onClick={create} className="btn-primary w-full mt-4 py-3.5">Crear rutina</button>
           </div>
         </div>
