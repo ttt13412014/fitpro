@@ -1,5 +1,5 @@
 'use client';
-
+import { ExerciseSelector } from "@/components/workout/ExerciseSelector";
 import { useEffect, useState } from 'react';
 import { getSupabaseClient } from '@/lib/supabase';
 import type { Exercise } from '@/types';
