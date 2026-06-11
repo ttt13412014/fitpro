@@ -1,4 +1,4 @@
-'use client';
+'use client';import NaturalInput from "@/components/nutrition/NaturalInput"
 
 import { useEffect, useState, useRef } from 'react';
 import { useAuth } from '@/context/auth-context';
@@ -259,6 +259,27 @@ export default function NutritionPage() {
       </div>
 
       {/* Weekly chart — collapsible on mobile */}
+      {/* Input natural */}
+<div className="card mb-4">
+  <p className="font-semibold text-sm mb-3">Registrar con IA</p>
+  <NaturalInput
+    onConfirm={async (result, mealType) => {
+      for (const food of result.foods) {
+        await addNutritionLog({
+          meal_name: food.name,
+          meal_time: mealType,
+          calories: food.calories,
+          protein_g: food.protein,
+          carbs_g: food.carbs,
+          fat_g: food.fat,
+          logged_date: new Date().toISOString().split("T")[0],
+          user_id: user!.id,
+        });
+      }
+      await loadData();
+    }}
+  />
+</div>
       <div className="card">
         <button
           className="flex items-center justify-between w-full"
