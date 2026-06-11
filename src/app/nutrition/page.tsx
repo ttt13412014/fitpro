@@ -267,7 +267,7 @@ export default function NutritionPage() {
       for (const food of result.foods) {
         await addNutritionLog(user!.id, {
           meal_name: food.name,
-          meal_time: mealType,
+          meal_time: mealType as MealTime,
           calories: food.calories,
           protein_g: food.protein,
           carbs_g: food.carbs,
