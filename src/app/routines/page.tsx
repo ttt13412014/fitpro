@@ -1,4 +1,5 @@
 'use client';
+import { ExerciseSelector } from "@/components/workout/ExerciseSelector";
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/context/auth-context';
