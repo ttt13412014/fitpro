@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Camera, Square, RotateCcw, CheckCircle, Save, Loader2, Sun, Info, AlertTriangle } from "lucide-react";
 import toast from "react-hot-toast";
-import { createClient } from "@/lib/supabase/client";
+import { createClient } from "@/lib/supabase";
 
 interface Keypoint { x: number; y: number; score: number; name: string; }
 type Phase = "idle" | "calibrating" | "ready" | "running" | "done";
