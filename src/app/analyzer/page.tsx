@@ -647,12 +647,13 @@ export default function AnalyzerPage() {
           <div className="relative rounded-3xl overflow-hidden bg-black" style={{ aspectRatio: "3/4", maxHeight: "58vh" }}>
             <video
               ref={videoRef}
-              className="absolute inset-0 w-full h-full object-cover scale-x-[-1]"
+              className="absolute inset-0 w-full h-full object-cover"
               muted playsInline autoPlay
             />
             <canvas
               ref={canvasRef}
-              className="absolute inset-0 w-full h-full scale-x-[-1]"
+              className="absolute inset-0 w-full h-full"
+style={{ opacity: 0.99 }}
               width={canvasSize.w}
               height={canvasSize.h}
             />
