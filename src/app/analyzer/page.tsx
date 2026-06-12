@@ -354,7 +354,7 @@ export default function AnalyzerPage() {
   const initCamera = useCallback(async () => {
     const constraints = {
       video: {
-        facingMode: "user",
+        facingMode: { ideal: "user" },
         width: { ideal: 640 },
         height: { ideal: 480 },
       },
@@ -365,7 +365,7 @@ export default function AnalyzerPage() {
       await new Promise<void>((resolve) => {
         videoRef.current!.onloadedmetadata = () => resolve();
       });
-      await videoRef.current.play();
+      try { await videoRef.current.play(); } catch { videoRef.current.play(); }
       setCanvasSize({
         w: videoRef.current.videoWidth || 640,
         h: videoRef.current.videoHeight || 480,
