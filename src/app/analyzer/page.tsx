@@ -652,8 +652,7 @@ export default function AnalyzerPage() {
             />
             <canvas
               ref={canvasRef}
-              className="absolute inset-0 w-full h-full" style={{ zIndex: 2 }}
-style={{ opacity: 1, mixBlendMode: "normal" }}
+              className="absolute inset-0 w-full h-full" style={{ zIndex: 2, opacity: 1 }}
               width={canvasSize.w}
               height={canvasSize.h}
             />
