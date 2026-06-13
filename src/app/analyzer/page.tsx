@@ -362,10 +362,12 @@ export default function AnalyzerPage() {
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
     if (videoRef.current) {
       videoRef.current.srcObject = stream;
-      await new Promise<void>((resolve) => {
-        videoRef.current!.onloadedmetadata = () => resolve();
+      await new Promise<void>((resolve, reject) => {
+        videoRef.current!.onloadedmetadata = () => {
+          videoRef.current!.play().then(resolve).catch(reject);
+        };
+        videoRef.current!.onerror = reject;
       });
-      try { await videoRef.current.play(); } catch { videoRef.current.play(); }
       setCanvasSize({
         w: videoRef.current.videoWidth || 640,
         h: videoRef.current.videoHeight || 480,
@@ -647,7 +649,7 @@ export default function AnalyzerPage() {
           <div className="relative rounded-3xl overflow-hidden bg-black" style={{ aspectRatio: "3/4", maxHeight: "58vh" }}>
             <video
               ref={videoRef}
-              className="absolute inset-0 w-full h-full object-cover" style={{ zIndex: 1 }}
+              className="absolute inset-0 w-full h-full object-cover" style={{ zIndex: 1, transform: "scaleX(-1)" }}
               muted playsInline autoPlay
             />
             <canvas
