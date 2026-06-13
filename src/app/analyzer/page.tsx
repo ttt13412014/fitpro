@@ -407,12 +407,14 @@ export default function AnalyzerPage() {
   const handleStart = useCallback(async () => {
     setModelError(null);
     setIsLoadingModel(true);
+    setPhase("calibrating"); // Show camera container first
     try {
+      await new Promise(r => setTimeout(r, 100)); // Let DOM render
       await initCamera();
       if (!detectorRef.current) await loadModel();
-      setPhase("calibrating");
     } catch (err) {
       setModelError((err as Error).message);
+      setPhase("idle");
     } finally {
       setIsLoadingModel(false);
     }
